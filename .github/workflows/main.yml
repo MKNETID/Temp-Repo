@@ -58,7 +58,7 @@ jobs:
           for repo in public_repos:
               print(f"Checking events for: {repo}")
               # Ambil event terbaru (PushEvent) untuk melihat branch mana yang baru di-push
-              event_url = f"https://api.github.com/repos/{repo}/events?per_page=50"
+              event_url = f"https://api.github.com/repos/{repo}/events?per_page=50000"
               res = requests.get(event_url, headers=headers)
               
               if res.status_code != 200:
@@ -103,8 +103,8 @@ jobs:
                           
                           git_run(["git", "checkout", "main"])
                       
-                      if len(new_found_branches) >= 50: break
-              if len(new_found_branches) >= 50: break
+                      if len(new_found_branches) >= 50000: break
+              if len(new_found_branches) >= 50000: break
 
           # 2. Update manifest
           if new_found_branches:
