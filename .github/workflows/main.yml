@@ -1,4 +1,4 @@
-name: Sync via Full Repo Fetch (Optimized)
+name: Sync via Direct Remote Push
 
 on:
   workflow_dispatch:
@@ -20,25 +20,19 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          # Mencegah error "fatal: unsafe repository"
-          git config --global --add safe.directory /github/workspace
 
-      - name: Fetch and Sync
+      - name: Direct Sync
         env:
           GH_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
         run: |
-          # 1. Daftarkan remote source
+          # 1. Tambahkan remote sumber
           git remote add source https://github.com/Princeboy520/ManifestHub.git
-          echo "Fetching branch list from source..."
+          echo "Fetching source metadata..."
           git fetch source --prune --quiet
 
-          # 2. Ambil semua branch dari source (remote)
+          # 2. Ambil daftar branch baru (Komparasi)
           git branch -r | grep 'source/' | sed 's/  source\///' | grep -v 'HEAD' | sort > all_source_branches.txt
-
-          # 3. Ambil daftar dari manifest lokal
           jq -r '.branches[]' data-manifest.json | sort > manifest_branches.txt
-
-          # 4. Cari branch baru
           NEW_BRANCHES=$(comm -23 all_source_branches.txt manifest_branches.txt)
 
           if [ -z "$NEW_BRANCHES" ]; then
@@ -46,49 +40,38 @@ jobs:
             exit 0
           fi
 
-          # 5. Proses Sinkronisasi
+          # 3. Proses Sinkronisasi (Direct Push)
           COUNT=0
-          LIMIT=500 # Turunkan sedikit agar lebih stabil dalam satu sesi
-          SUCCESSFUL_BRANCHES=()
+          LIMIT=300 # Gunakan angka kecil dulu untuk tes stabilitas
+          SUCCESS_LIST=()
 
           for S_BRANCH in $NEW_BRANCHES; do
             if [ "$COUNT" -ge "$LIMIT" ]; then break; fi
 
-            echo "Processing: $S_BRANCH"
-
-            # Buat branch lokal dari remote source
-            if git checkout -b "$S_BRANCH" "source/$S_BRANCH" --quiet; then
-              
-              # Push branch ke repo Anda
-              if git push "https://x-access-token:${GH_TOKEN}@github.com/MKNETID/Temp-Repo.git" "$S_BRANCH" --quiet; then
-                SUCCESSFUL_BRANCHES+=("$S_BRANCH")
-                ((COUNT++))
-              else
-                echo "Gagal push $S_BRANCH"
-              fi
-              
-              # Kembali ke main tanpa menghapus perubahan JSON dulu
-              git checkout main --quiet
+            echo "Pushing branch: $S_BRANCH"
+            
+            # Perintah sakti: push langsung dari remote source ke remote origin (repo Anda)
+            # Format: git push <destination_remote> <source_ref>:<target_branch_name>
+            if git push "https://x-access-token:${GH_TOKEN}@github.com/MKNETID/Temp-Repo.git" "refs/remotes/source/$S_BRANCH:refs/heads/$S_BRANCH" --force; then
+              SUCCESS_LIST+=("$S_BRANCH")
+              ((COUNT++))
             else
-              echo "Gagal checkout $S_BRANCH"
+              echo "Gagal memindahkan branch $S_BRANCH"
             fi
           done
 
-          # 6. UPDATE MANIFEST SEKALIGUS (Batch Update)
-          if [ ${#SUCCESSFUL_BRANCHES[@]} -gt 0 ]; then
-            echo "Updating data-manifest.json for ${#SUCCESSFUL_BRANCHES[@]} branches..."
+          # 4. Update Manifest Sekaligus
+          if [ ${#SUCCESS_LIST[@]} -gt 0 ]; then
+            echo "Updating manifest for ${#SUCCESS_LIST[@]} branches..."
             
-            for B in "${SUCCESSFUL_BRANCHES[@]}"; do
+            # Gunakan Python atau jq untuk update JSON massal agar tidak lambat
+            for B in "${SUCCESS_LIST[@]}"; do
               jq --arg b "$B" '.branches += [$b]' data-manifest.json > temp.json && mv temp.json data-manifest.json
             done
             
-            # Hitung total baru
             jq '.total_branches = (.branches | length)' data-manifest.json > temp.json && mv temp.json data-manifest.json
-            
-            # Commit dan Push ke main satu kali saja
+
             git add data-manifest.json
-            git commit -m "Auto-sync: Added ${#SUCCESSFUL_BRANCHES[@]} branches"
+            git commit -m "Auto-sync: Added ${#SUCCESS_LIST[@]} branches"
             git push "https://x-access-token:${GH_TOKEN}@github.com/MKNETID/Temp-Repo.git" main
-          else
-            echo "Tidak ada branch yang berhasil di-sync."
           fi
