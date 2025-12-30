@@ -1,11 +1,14 @@
-name: Sync External Branches
+name: Sync Missing Branches
 
 on:
-  workflow_dispatch: # Jalankan manual
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
     steps:
       - name: Checkout My Repo
         uses: actions/checkout@v4
@@ -18,47 +21,49 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Process Branches
+      - name: Process New Branches Only
         env:
           GH_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
         run: |
           SOURCE_REPO="Princeboy520/ManifestHub"
           MY_REPO="MKNETID/Temp-Repo"
           
-          # 1. Ambil daftar branch yang sudah ada di repo saya untuk filter
-          echo "Fetching existing branches..."
-          git fetch --prune
-          EXISTING_BRANCHES=$(git branch -r | sed 's/origin\///' | tr -d ' ')
+          # 1. Ambil semua branch dari repo SUMBER via API (Paging mungkin diperlukan jika > 100)
+          # Untuk efisiensi, kita ambil 100 branch terbaru dulu
+          echo "Fetching branches from source..."
+          SOURCE_BRANCHES=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$SOURCE_REPO/branches?per_page=100" | jq -r '.[].name')
 
-          # 2. Baca data-manifest.json (asumsi ada di root)
-          # Menggunakan jq untuk mengambil array branches
-          BRANCHES_TO_SYNC=$(jq -r '.branches[]' data-manifest.json)
+          # 2. Ambil daftar branch yang sudah tercatat di data-manifest.json Anda
+          # Kita gunakan jq untuk mendapatkan array branches mentah
+          ALREADY_SYNCED=$(jq -r '.branches[]' data-manifest.json)
 
-          for BRANCH in $BRANCHES_TO_SYNC; do
-            # Cek apakah branch sudah ada
-            if echo "$EXISTING_BRANCHES" | grep -qxw "$BRANCH"; then
-              echo "Branch $BRANCH sudah ada, skip."
+          COUNT=0
+          LIMIT=50 # Batasi jumlah per run agar stabil
+
+          for S_BRANCH in $SOURCE_BRANCHES; do
+            if [ "$COUNT" -ge "$LIMIT" ]; then break; fi
+            
+            # Cek apakah S_BRANCH sudah ada di data-manifest.json
+            if echo "$ALREADY_SYNCED" | grep -qxw "$S_BRANCH"; then
+              echo "Branch $S_BRANCH sudah terdaftar di JSON, skip."
               continue
             fi
 
-            echo "Processing Branch: $BRANCH"
+            echo "New branch found: $S_BRANCH. Syncing..."
 
-            # Buat branch baru dari main
+            # Buat branch baru
             git checkout main
-            git checkout -b "$BRANCH"
+            git checkout -b "$S_BRANCH"
 
-            # 3. Ambil file .lua dari repo sumber menggunakan API GitHub (lebih efisien daripada clone)
-            # Kita cari file .lua di branch sumber yang namanya sama dengan branch
-            FILE_CONTENT=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$SOURCE_REPO/contents?ref=$BRANCH")
-            
-            # Download semua file .lua yang ditemukan di branch tersebut
-            FILES=$(echo "$FILE_CONTENT" | jq -r '.[] | select(.name | endswith(".lua")) | .download_url')
+            # Ambil file .lua
+            API_URL="https://api.github.com/repos/$SOURCE_REPO/contents?ref=$S_BRANCH"
+            FILES=$(curl -s -H "Authorization: token $GH_TOKEN" "$API_URL" | jq -r '.[] | select(.name | endswith(".lua")) | .download_url')
 
             if [ -z "$FILES" ] || [ "$FILES" == "null" ]; then
-              echo "Tidak ada file .lua di branch $BRANCH sumber."
+              echo "No lua files in $S_BRANCH."
               git checkout main
-              git branch -D "$BRANCH"
+              git branch -D "$S_BRANCH"
               continue
             fi
 
@@ -68,12 +73,17 @@ jobs:
               git add "$FILENAME"
             done
 
-            # Commit dan Push
-            git commit -m "Add lua files for branch $BRANCH"
-            git push https://x-access-token:${GH_TOKEN}@github.com/${MY_REPO}.git "$BRANCH"
+            git commit -m "Add new branch $S_BRANCH from source"
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${MY_REPO}.git" "$S_BRANCH"
+
+            # --- BAGIAN PENTING: Update data-manifest.json agar tidak diambil lagi ---
+            # Menambahkan branch baru ke array 'branches' dan mengupdate 'total_branches'
+            jq --arg b "$S_BRANCH" '.branches += [$b] | .total_branches = (.branches | length)' data-manifest.json > temp.json && mv temp.json data-manifest.json
             
-            echo "Successfully synced branch $BRANCH"
-            
-            # Kembali ke main untuk iterasi berikutnya
             git checkout main
+            git add data-manifest.json
+            git commit -m "Update manifest: Added $S_BRANCH"
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${MY_REPO}.git" main
+
+            COUNT=$((COUNT + 1))
           done
