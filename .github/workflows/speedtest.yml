@@ -7,8 +7,14 @@ jobs:
     steps:
       - name: Install Speedtest CLI
         run: |
+          # 1. Tambahkan repo menggunakan script resmi
           curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
-          sudo apt-get install speedtest
+          
+          # 2. Update ulang cache apt secara eksplisit
+          sudo apt-get update
+          
+          # 3. Install paket dengan nama spesifik 'speedtest'
+          sudo apt-get install -y speedtest
 
       - name: Run Speedtest
         run: speedtest --accept-license --accept-gdpr
