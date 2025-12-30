@@ -1,132 +1,79 @@
-name: Sync Public Lua Branches
+name: Sync External Branches
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Jalankan manual
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout My Repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1 # Cukup 1 karena kita akan manipulasi branch secara spesifik
+          token: ${{ secrets.MY_GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install Requests
-        run: pip install requests
-
-      - name: Run Sync Script
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MY_REPO: "MKNETID/Temp-Repo"
-          PUBLIC_REPOS: "hammerwebsite12/sojogames2,Princeboy520/ManifestHub,SPIN0ZAi/SB_manifest_DB,dvahana2424-web/sojogamesdatabase1"
+      - name: Setup Git Config
         run: |
-          python - <<EOF
-          import os
-          import json
-          import requests
-          import subprocess
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          token = os.getenv('GH_TOKEN')
-          headers = {'Authorization': f'token {token}'}
-          public_repos = os.getenv('PUBLIC_REPOS').split(',')
+      - name: Process Branches
+        env:
+          GH_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
+        run: |
+          SOURCE_REPO="Princeboy520/ManifestHub"
+          MY_REPO="MKNETID/Temp-Repo"
           
-          # 1. Load manifest
-          with open('data-manifest.json', 'r') as f:
-              manifest = json.load(f)
-          existing_branches = set(manifest['branches'])
+          # 1. Ambil daftar branch yang sudah ada di repo saya untuk filter
+          echo "Fetching existing branches..."
+          git fetch --prune
+          EXISTING_BRANCHES=$(git branch -r | sed 's/origin\///' | tr -d ' ')
 
-          new_found_branches = []
-          
-          def git_run(args):
-              return subprocess.run(args, capture_output=True, text=True)
+          # 2. Baca data-manifest.json (asumsi ada di root)
+          # Menggunakan jq untuk mengambil array branches
+          BRANCHES_TO_SYNC=$(jq -r '.branches[]' data-manifest.json)
 
-          # Config Git
-          git_run(["git", "config", "user.name", "github-actions[bot]"])
-          git_run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"])
+          for BRANCH in $BRANCHES_TO_SYNC; do
+            # Cek apakah branch sudah ada
+            if echo "$EXISTING_BRANCHES" | grep -qxw "$BRANCH"; then
+              echo "Branch $BRANCH sudah ada, skip."
+              continue
+            fi
 
-          for repo in public_repos:
-              print(f"Checking events for: {repo}")
-              # Ambil event terbaru (PushEvent) untuk melihat branch mana yang baru di-push
-              event_url = f"https://api.github.com/repos/{repo}/events?per_page=50000"
-              res = requests.get(event_url, headers=headers)
-              
-              if res.status_code != 200:
-                  continue
+            echo "Processing Branch: $BRANCH"
 
-              events = res.json()
-              target_branches = set()
-              
-              for event in events:
-                  if event['type'] == 'PushEvent':
-                      ref = event['payload'].get('ref', '')
-                      if 'refs/heads/' in ref:
-                          b_name = ref.replace('refs/heads/', '')
-                          if b_name.isdigit():
-                              target_branches.add(b_name)
+            # Buat branch baru dari main
+            git checkout main
+            git checkout -b "$BRANCH"
 
-              for branch_name in target_branches:
-                  if branch_name not in existing_branches:
-                      print(f"Detected new activity on branch: {branch_name}")
-                      
-                      # Coba ambil file .lua
-                      file_url = f"https://raw.githubusercontent.com/{repo}/{branch_name}/{branch_name}.lua"
-                      file_res = requests.get(file_url)
-                      
-                      if file_res.status_code == 200:
-                          # Buat Orphan Branch dengan cara yang lebih aman
-                          git_run(["git", "checkout", "--orphan", branch_name])
-                          git_run(["git", "rm", "-rf", "."])
-                          
-                          with open(f"{branch_name}.lua", "wb") as f:
-                              f.write(file_res.content)
-                          
-                          git_run(["git", "add", f"{branch_name}.lua"])
-                          git_run(["git", "commit", "-m", f"Add {branch_name}.lua from {repo}"])
-                          
-                          push = subprocess.run(["git", "push", "origin", branch_name])
-                          
-                          if push.returncode == 0:
-                              new_found_branches.append(branch_name)
-                              existing_branches.add(branch_name)
-                              print(f"Successfully pushed branch: {branch_name}")
-                          
-                          git_run(["git", "checkout", "main"])
-                      
-                      if len(new_found_branches) >= 50000: break
-              if len(new_found_branches) >= 50000: break
+            # 3. Ambil file .lua dari repo sumber menggunakan API GitHub (lebih efisien daripada clone)
+            # Kita cari file .lua di branch sumber yang namanya sama dengan branch
+            FILE_CONTENT=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$SOURCE_REPO/contents?ref=$BRANCH")
+            
+            # Download semua file .lua yang ditemukan di branch tersebut
+            FILES=$(echo "$FILE_CONTENT" | jq -r '.[] | select(.name | endswith(".lua")) | .download_url')
 
-          # 2. Update manifest
-          if new_found_branches:
-              git_run(["git", "checkout", "main"])
-              
-              # Logika sorting yang diperbaiki:
-              # Pisahkan yang angka dan yang teks (seperti 'main')
-              numeric_branches = [b for b in existing_branches if b.isdigit()]
-              other_branches = [b for b in existing_branches if not b.isdigit()]
-              
-              # Urutkan angka secara numerik, lalu tambahkan branch teks di akhir/awal
-              sorted_list = sorted(numeric_branches, key=int) + sorted(other_branches)
-              
-              manifest['branches'] = sorted_list
-              manifest['total_branches'] = len(sorted_list)
-              
-              with open('data-manifest.json', 'w') as f:
-                  json.dump(manifest, f, indent=2)
-              
-              git_run(["git", "add", "data-manifest.json"])
-              git_run(["git", "commit", "-m", f"Update manifest: added {len(new_found_branches)} branches"])
-              git_run(["git", "push", "origin", "main"])
-              print(f"Manifest updated with {len(new_found_branches)} new entries.")
-          else:
-              print("No new branches to sync.")
+            if [ -z "$FILES" ] || [ "$FILES" == "null" ]; then
+              echo "Tidak ada file .lua di branch $BRANCH sumber."
+              git checkout main
+              git branch -D "$BRANCH"
+              continue
+            fi
+
+            for FILE_URL in $FILES; do
+              FILENAME=$(basename "$FILE_URL")
+              curl -sL -o "$FILENAME" "$FILE_URL"
+              git add "$FILENAME"
+            done
+
+            # Commit dan Push
+            git commit -m "Add lua files for branch $BRANCH"
+            git push https://x-access-token:${GH_TOKEN}@github.com/${MY_REPO}.git "$BRANCH"
+            
+            echo "Successfully synced branch $BRANCH"
+            
+            # Kembali ke main untuk iterasi berikutnya
+            git checkout main
+          done
