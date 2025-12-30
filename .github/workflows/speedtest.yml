@@ -5,16 +5,18 @@ jobs:
   speedtest:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Speedtest CLI
+      - name: Install Speedtest CLI (Workaround for Noble)
         run: |
-          # 1. Tambahkan repo menggunakan script resmi
-          curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
+          # Install gpg jika belum ada
+          sudo apt-get update && sudo apt-get install -y gnupg
           
-          # 2. Update ulang cache apt secara eksplisit
+          # Tambahkan key dan repo secara manual (menggunakan 'jammy' karena 'noble' belum tersedia)
+          curl -L https://packagecloud.io/ookla/speedtest-cli/gpgkey | sudo gpg --dearmor -o /etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/ookla_speedtest-cli-archive-keyring.gpg] https://packagecloud.io/ookla/speedtest-cli/ubuntu/ jammy main" | sudo tee /etc/apt/sources.list.d/ookla_speedtest-cli.list
+          
+          # Install
           sudo apt-get update
-          
-          # 3. Install paket dengan nama spesifik 'speedtest'
           sudo apt-get install -y speedtest
-
+          
       - name: Run Speedtest
-        run: speedtest --accept-license --accept-gdpr
+        run: speedtest --accept-license
