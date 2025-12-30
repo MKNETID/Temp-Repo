@@ -1,0 +1,14 @@
+name: Network Speedtest
+on: [workflow_dispatch] # Bisa dijalankan manual
+
+jobs:
+  speedtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Speedtest CLI
+        run: |
+          curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
+          sudo apt-get install speedtest
+
+      - name: Run Speedtest
+        run: speedtest --accept-license --accept-gdpr
