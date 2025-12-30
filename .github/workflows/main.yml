@@ -1,15 +1,19 @@
 name: Sync External Branches
 
 on:
-  workflow_dispatch: # Jalankan manual
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Memberikan izin eksplisit untuk menulis ke repo
+    
     steps:
       - name: Checkout My Repo
         uses: actions/checkout@v4
         with:
+          # Sangat penting menggunakan token custom agar punya akses push
           token: ${{ secrets.MY_GITHUB_TOKEN }}
           fetch-depth: 0
 
@@ -17,6 +21,8 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Menghindari error "fatal: unsafe repository"
+          git config --global --add safe.directory /github/workspace
 
       - name: Process Branches
         env:
@@ -25,38 +31,48 @@ jobs:
           SOURCE_REPO="Princeboy520/ManifestHub"
           MY_REPO="MKNETID/Temp-Repo"
           
-          # 1. Ambil daftar branch yang sudah ada di repo saya untuk filter
+          # Ambil daftar branch lokal & remote agar pengecekan akurat
           echo "Fetching existing branches..."
-          git fetch --prune
+          git fetch --all --prune
+          
+          # Ambil daftar branch di repo saya
           EXISTING_BRANCHES=$(git branch -r | sed 's/origin\///' | tr -d ' ')
 
-          # 2. Baca data-manifest.json (asumsi ada di root)
-          # Menggunakan jq untuk mengambil array branches
+          # Baca data-manifest.json
           BRANCHES_TO_SYNC=$(jq -r '.branches[]' data-manifest.json)
 
+          # Counter untuk mencegah timeout (proses 500 per run agar aman)
+          COUNT=0
+          LIMIT=500 
+
           for BRANCH in $BRANCHES_TO_SYNC; do
-            # Cek apakah branch sudah ada
+            if [ "$COUNT" -ge "$LIMIT" ]; then
+               echo "Limit batch $LIMIT tercapai. Berhenti agar tidak timeout."
+               break
+            fi
+
+            # Cek jika branch sudah ada
             if echo "$EXISTING_BRANCHES" | grep -qxw "$BRANCH"; then
               echo "Branch $BRANCH sudah ada, skip."
               continue
             fi
 
+            echo "--------------------------------------"
             echo "Processing Branch: $BRANCH"
 
-            # Buat branch baru dari main
+            # Reset ke main sebelum buat branch baru
             git checkout main
             git checkout -b "$BRANCH"
 
-            # 3. Ambil file .lua dari repo sumber menggunakan API GitHub (lebih efisien daripada clone)
-            # Kita cari file .lua di branch sumber yang namanya sama dengan branch
-            FILE_CONTENT=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$SOURCE_REPO/contents?ref=$BRANCH")
+            # Ambil konten file dari API GitHub
+            API_URL="https://api.github.com/repos/$SOURCE_REPO/contents?ref=$BRANCH"
+            FILE_DATA=$(curl -s -H "Authorization: token $GH_TOKEN" "$API_URL")
             
-            # Download semua file .lua yang ditemukan di branch tersebut
-            FILES=$(echo "$FILE_CONTENT" | jq -r '.[] | select(.name | endswith(".lua")) | .download_url')
+            # Cari file .lua
+            FILES=$(echo "$FILE_DATA" | jq -r '.[] | select(.name | endswith(".lua")) | .download_url' 2>/dev/null)
 
             if [ -z "$FILES" ] || [ "$FILES" == "null" ]; then
-              echo "Tidak ada file .lua di branch $BRANCH sumber."
+              echo "Skipping: Tidak ada file .lua di branch $BRANCH sumber."
               git checkout main
               git branch -D "$BRANCH"
               continue
@@ -68,12 +84,11 @@ jobs:
               git add "$FILENAME"
             done
 
-            # Commit dan Push
-            git commit -m "Add lua files for branch $BRANCH"
-            git push https://x-access-token:${GH_TOKEN}@github.com/${MY_REPO}.git "$BRANCH"
+            git commit -m "Auto-sync: Add lua for branch $BRANCH"
             
-            echo "Successfully synced branch $BRANCH"
+            # Gunakan format URL dengan token untuk autentikasi push yang pasti berhasil
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${MY_REPO}.git" "$BRANCH"
             
-            # Kembali ke main untuk iterasi berikutnya
-            git checkout main
+            echo "Successfully synced: $BRANCH"
+            COUNT=$((COUNT + 1))
           done
