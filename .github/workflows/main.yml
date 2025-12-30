@@ -1,4 +1,4 @@
-name: Sync All Missing Branches (Full Scan)
+name: Sync via Full Repo Fetch
 
 on:
   workflow_dispatch:
@@ -21,87 +21,62 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Process New Branches
+      - name: Fetch and Sync
         env:
           GH_TOKEN: ${{ secrets.MY_GITHUB_TOKEN }}
         run: |
-          SOURCE_REPO="Princeboy520/ManifestHub"
-          MY_REPO="MKNETID/Temp-Repo"
-
-          # 1. AMBIL SEMUA DAFTAR BRANCH (Looping Pagination)
-          echo "Fetching all branch names from source (this may take a while)..."
-          PAGE=1
-          touch all_source_branches.txt
-          while : ; do
-            echo "Fetching page $PAGE..."
-            RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$SOURCE_REPO/branches?per_page=100&page=$PAGE")
-            
-            # Jika response kosong atau error, berhenti
-            if [ "$RESPONSE" == "[]" ] || [ -z "$RESPONSE" ]; then break; fi
-            
-            echo "$RESPONSE" | jq -r '.[].name' >> all_source_branches.txt
-            
-            # Limitasi: GitHub API punya rate limit 5000/jam. 
-            # 65rb branch / 100 = 650 request. Masih aman.
-            ((PAGE++))
-          done
-
-          # 2. KOMPARASI DATA
-          echo "Comparing with data-manifest.json..."
-          sort all_source_branches.txt -o all_source_branches.txt
-          jq -r '.branches[]' data-manifest.json | sort > manifest_branches.txt
+          # 1. Daftarkan repo sumber sebagai remote tambahan
+          git remote add source https://github.com/Princeboy520/ManifestHub.git
           
-          # Ambil branch yang ada di source tapi TIDAK ada di manifest
+          # 2. Ambil semua daftar branch dari remote source tanpa download file dulu (hemat storage)
+          echo "Fetching branch list from source..."
+          git fetch source --prune
+
+          # 3. List semua branch dari source dan bersihkan namanya
+          # Kita ambil branch yang ada di 'remotes/source/'
+          git branch -r | grep 'source/' | sed 's/  source\///' | grep -v 'HEAD' | sort > all_source_branches.txt
+
+          # 4. Ambil daftar dari manifest lokal
+          jq -r '.branches[]' data-manifest.json | sort > manifest_branches.txt
+
+          # 5. Cari branch yang belum ada di manifest
           NEW_BRANCHES=$(comm -23 all_source_branches.txt manifest_branches.txt)
 
           if [ -z "$NEW_BRANCHES" ]; then
-            echo "No new branches to sync."
+            echo "Semua sudah sinkron."
             exit 0
           fi
 
-          # 3. PROSES SYNC
-          # Catatan: Kita batasi proses sync file-nya per run agar tidak timeout (6 jam limit)
+          # 6. Proses Sinkronisasi
           COUNT=0
-          LIMIT=1000 # Anda bisa menaikkan ini jika ingin lebih banyak per jalan
+          LIMIT=1000 # Batasi per run agar tidak kena limit push GitHub
 
           for S_BRANCH in $NEW_BRANCHES; do
-            if [ "$COUNT" -ge "$LIMIT" ]; then 
-              echo "Reached batch limit ($LIMIT). Stop for now."
-              break 
+            if [ "$COUNT" -ge "$LIMIT" ]; then break; fi
+
+            echo "Syncing: $S_BRANCH"
+
+            # Checkout branch dari source ke lokal dengan nama yang sama
+            # Kita gunakan --track agar git tahu sumbernya
+            if git checkout -b "$S_BRANCH" "source/$S_BRANCH" --quiet; then
+              
+              # Push branch ke repo Anda (origin)
+              git push "https://x-access-token:${GH_TOKEN}@github.com/MKNETID/Temp-Repo.git" "$S_BRANCH"
+
+              # Kembali ke main untuk update JSON
+              git checkout main --quiet
+              jq --arg b "$S_BRANCH" '.branches += [$b] | .total_branches = (.branches | length)' data-manifest.json > temp.json && mv temp.json data-manifest.json
+              
+              # Commit update manifest agar tidak diulang
+              git add data-manifest.json
+              git commit -m "Manifest update: $S_BRANCH" --quiet
+              
+              ((COUNT++))
+            else
+              echo "Gagal checkout $S_BRANCH, skip."
+              git checkout main --quiet
             fi
-
-            echo "Syncing Branch: $S_BRANCH"
-
-            # Create branch locally
-            git checkout main
-            git checkout -b "$S_BRANCH"
-
-            # Ambil .lua file
-            API_URL="https://api.github.com/repos/$SOURCE_REPO/contents?ref=$S_BRANCH"
-            FILE_DATA=$(curl -s -H "Authorization: token $GH_TOKEN" "$API_URL")
-            FILES=$(echo "$FILE_DATA" | jq -r '.[] | select(.name | endswith(".lua")) | .download_url' 2>/dev/null)
-
-            if [ -z "$FILES" ] || [ "$FILES" == "null" ]; then
-              git checkout main && git branch -D "$S_BRANCH"
-              continue
-            fi
-
-            for FILE_URL in $FILES; do
-              FILENAME=$(basename "$FILE_URL")
-              curl -sL -o "$FILENAME" "$FILE_URL"
-              git add "$FILENAME"
-            done
-
-            git commit -m "Sync $S_BRANCH"
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${MY_REPO}.git" "$S_BRANCH"
-
-            # Update JSON di branch main
-            git checkout main
-            jq --arg b "$S_BRANCH" '.branches += [$b] | .total_branches = (.branches | length)' data-manifest.json > temp.json && mv temp.json data-manifest.json
-            git add data-manifest.json
-            git commit -m "Update manifest: $S_BRANCH"
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${MY_REPO}.git" main
-
-            ((COUNT++))
           done
+
+          # Push semua perubahan manifest di main sekaligus
+          git push "https://x-access-token:${GH_TOKEN}@github.com/MKNETID/Temp-Repo.git" main
