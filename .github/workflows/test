@@ -1,0 +1,91 @@
+name: Sync Branches and Update Manifest
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-and-manifest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.API_TOKEN }}
+          fetch-depth: 0 # Penting: Ambil semua branch untuk manifest nanti
+
+      - name: Setup Git Config
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync Process (New Branches)
+        env:
+          GH_TOKEN: ${{ secrets.API_TOKEN }}
+          PUBLIC_REPO: "dvahana2424-web/sojogamesdatabase1"
+        run: |
+          # 1. Ambil daftar semua branch dari repo publik
+          gh api repos/$PUBLIC_REPO/branches --paginate --jq '.[].name' > public_branches.txt
+
+          # 2. Daftar branch lokal (remote)
+          git branch -r | sed 's/origin\///' | tr -d ' ' > existing_branches.txt
+
+          LIMIT=100
+          COUNT=0
+          
+          while IFS= read -r BRANCH; do
+            if [ -z "$BRANCH" ] || [ "$BRANCH" == "main" ] || [ $COUNT -ge $LIMIT ]; then continue; fi
+            
+            if grep -qx "$BRANCH" existing_branches.txt; then
+              echo "Skip: $BRANCH sudah ada."
+              continue
+            fi
+
+            echo "Syncing: $BRANCH"
+            FILE_URL="https://raw.githubusercontent.com/$PUBLIC_REPO/$BRANCH/$BRANCH.lua"
+            
+            mkdir -p temp_file_dir
+            HTTP_STATUS=$(curl -s -L -o "temp_file_dir/$BRANCH.lua" -w "%{http_code}" "$FILE_URL")
+            
+            if [ "$HTTP_STATUS" -eq 200 ]; then
+              git checkout --orphan "$BRANCH"
+              git rm -rf . --quiet > /dev/null
+              mv "temp_file_dir/$BRANCH.lua" .
+              git add "$BRANCH.lua"
+              git commit -m "Add $BRANCH.lua from public repo" --quiet
+              git push origin "$BRANCH" --force
+              COUNT=$((COUNT+1))
+              git checkout -f main
+            else
+              echo "Failed: $BRANCH.lua (HTTP $HTTP_STATUS)"
+              git checkout -f main
+            fi
+            rm -rf temp_file_dir
+          done < public_branches.txt
+          echo "Sync selesai. $COUNT branch baru ditambahkan."
+
+      - name: Generate and Push data-manifest.json
+        run: |
+          # Kembali ke main untuk update manifest
+          git checkout main
+          
+          # Ambil semua branch remote terbaru setelah sinkronisasi
+          git fetch --prune
+          BRANCHES=$(git branch -r | grep -v 'origin/HEAD' | sed 's/origin\///' | sed 's/^[[:space:]]*//')
+          TOTAL=$(echo "$BRANCHES" | wc -l)
+          BRANCH_ARRAY=$(echo "$BRANCHES" | jq -R . | jq -s .)
+          
+          # Buat file JSON
+          echo "{
+            \"total_branches\": $TOTAL,
+            \"branches\": $BRANCH_ARRAY,
+            \"last_updated\": \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\"
+          }" > data-manifest.json
+
+          # Commit dan Push manifest ke branch main
+          git add data-manifest.json
+          git diff-index --quiet HEAD || (git commit -m "Update data-manifest.json [skip ci]" && git push origin main)
