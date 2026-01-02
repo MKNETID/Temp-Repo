@@ -1,12 +1,12 @@
-name: Sync Branches from Remote Manifest
+name: Sync Update Manifest
 
 on:
-  # schedule:
-  #   - cron: '0 0 * * *'
+  schedule:
+    - cron: '0 1 * * *'
   workflow_dispatch:
 
 jobs:
-  sync-process:
+  sync-and-manifest:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,57 +16,36 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.API_TOKEN }}
-          fetch-depth: 0
+          fetch-depth: 0 # Penting: Ambil semua branch untuk manifest nanti
 
       - name: Setup Git Config
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Sync Process (Based on Remote Manifest)
+      - name: Sync Process (New Branches)
         env:
           GH_TOKEN: ${{ secrets.API_TOKEN }}
           PUBLIC_REPO: "Princeboy520/ManifestHub"
-          MANIFEST_URL: "https://raw.githubusercontent.com/MKNETID/Gemesak-Project/main/data-manifest.json"
         run: |
-          # 1. Ambil manifest dan bersihkan karakter aneh/BOM
-          echo "Fetching manifest..."
-          curl -sS -L "$MANIFEST_URL" | sed '1s/^\xEF\xBB\xBF//' > remote_manifest.json
-          
-          # 2. Validasi apakah ini JSON yang benar
-          if ! jq . remote_manifest.json > /dev/null 2>&1; then
-            echo "Error: File JSON tidak valid atau mengandung karakter ilegal."
-            # Intip 5 baris pertama untuk diagnosa
-            head -n 5 remote_manifest.json
-            exit 1
-          fi
+          # 1. Ambil daftar semua branch dari repo publik
+          gh api repos/$PUBLIC_REPO/branches --paginate --jq '.[].name' > public_branches.txt
 
-          # 3. Ekstrak daftar branch (pastikan tidak ada duplikat & bersih dari \r)
-          jq -r '.branches[]' remote_manifest.json | tr -d '\r' > target_branches.txt
-
-          # 4. Ambil daftar branch lokal yang sudah ada
-          git fetch --prune
+          # 2. Daftar branch lokal (remote)
           git branch -r | sed 's/origin\///' | tr -d ' ' > existing_branches.txt
 
           LIMIT=100
           COUNT=0
           
           while IFS= read -r BRANCH; do
-            # Lewati jika baris kosong
-            [ -z "$BRANCH" ] && continue
+            if [ -z "$BRANCH" ] || [ "$BRANCH" == "main" ] || [ $COUNT -ge $LIMIT ]; then continue; fi
             
-            # Batasi proses agar tidak kena limit GitHub Action (6 jam)
-            if [ $COUNT -ge $LIMIT ]; then 
-              echo "Limit $LIMIT tercapai. Menghentikan proses."
-              break
-            fi
-            
-            # Lewati branch main atau yang sudah ada
-            if [ "$BRANCH" == "main" ] || grep -qx "$BRANCH" existing_branches.txt; then
+            if grep -qx "$BRANCH" existing_branches.txt; then
+              echo "Skip: $BRANCH sudah ada."
               continue
             fi
 
-            echo "Syncing branch: $BRANCH"
+            echo "Syncing: $BRANCH"
             FILE_URL="https://raw.githubusercontent.com/$PUBLIC_REPO/$BRANCH/$BRANCH.lua"
             
             mkdir -p temp_file_dir
@@ -77,15 +56,14 @@ jobs:
               git rm -rf . --quiet > /dev/null
               mv "temp_file_dir/$BRANCH.lua" .
               git add "$BRANCH.lua"
-              git commit -m "Add $BRANCH.lua" --quiet
+              git commit -m "Add $BRANCH.lua from public repo" --quiet
               git push origin "$BRANCH" --force
               COUNT=$((COUNT+1))
               git checkout -f main
             else
-              echo "Gagal: $BRANCH.lua (HTTP $HTTP_STATUS)"
+              echo "Failed: $BRANCH.lua (HTTP $HTTP_STATUS)"
               git checkout -f main
             fi
             rm -rf temp_file_dir
-          done < target_branches.txt
-          
-          echo "Selesai! $COUNT branch baru ditambahkan."
+          done < public_branches.txt
+          echo "Sync selesai. $COUNT branch baru ditambahkan."
