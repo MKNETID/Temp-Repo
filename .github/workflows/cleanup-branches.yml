@@ -1,0 +1,21 @@
+name: Cleanup Old Branches
+
+on:
+  workflow_dispatch: # Memungkinkan Anda menjalankan ini secara manual dari tab Actions
+
+jobs:
+  delete-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Mengambil semua history dan branch
+
+      - name: Delete all branches except main
+        run: |
+          # Ambil daftar semua branch remote, bersihkan nama 'origin/', 
+          # lalu hapus 'main' dari daftar pencarian.
+          # Terakhir, hapus setiap branch yang tersisa di remote.
+          
+          git branch -r | grep -v 'origin/main' | sed 's/origin\///' | xargs -I {} git push origin --delete {}
