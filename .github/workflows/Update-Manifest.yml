@@ -23,30 +23,42 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Sync Process (New Branches)
+      - name: Sync Process (Check Against External JSON)
         env:
           GH_TOKEN: ${{ secrets.API_TOKEN }}
-          PUBLIC_REPO: "Princeboy520/ManifestHub"
+          SOURCE_REPO: "Princeboy520/ManifestHub"
+          JSON_URL: "https://raw.githubusercontent.com/MKNETID/Gemesak-Project/main/data-manifest.json"
         run: |
-          # 1. Ambil daftar semua branch dari repo publik
-          gh api repos/$PUBLIC_REPO/branches --paginate --jq '.[].name' > public_branches.txt
+          # 1. Ambil daftar branch dari repo sumber (Princeboy520)
+          gh api repos/$SOURCE_REPO/branches --paginate --jq '.[].name' > source_branches.txt
 
-          # 2. Daftar branch lokal (remote)
-          git branch -r | sed 's/origin\///' | tr -d ' ' > existing_branches.txt
+          # 2. Ambil daftar nama yang sudah terdaftar di JSON (MKNETID)
+          # Menggunakan jq untuk mengambil array dan menyimpannya ke file teks
+          curl -s $JSON_URL | jq -r '.[]' > manifest_list.txt
 
-          LIMIT=100
+          # 3. Ambil daftar branch yang sudah ada di repo Anda saat ini (lokal/remote)
+          git branch -r | sed 's/origin\///' | tr -d ' ' > my_existing_branches.txt
+
           COUNT=0
-          
           while IFS= read -r BRANCH; do
-            if [ -z "$BRANCH" ] || [ "$BRANCH" == "main" ] || [ $COUNT -ge $LIMIT ]; then continue; fi
+            # Lewati jika branch kosong atau main
+            if [ -z "$BRANCH" ] || [ "$BRANCH" == "main" ]; then continue; fi
             
-            if grep -qx "$BRANCH" existing_branches.txt; then
-              echo "Skip: $BRANCH sudah ada."
+            # CEK 1: Apakah sudah ada di data-manifest.json?
+            if grep -qx "$BRANCH" manifest_list.txt; then
+              echo "Skip: $BRANCH sudah terdaftar di manifest JSON."
               continue
             fi
 
-            echo "Syncing: $BRANCH"
-            FILE_URL="https://raw.githubusercontent.com/$PUBLIC_REPO/$BRANCH/$BRANCH.lua"
+            # CEK 2: Apakah sudah ada di repo Anda? (mencegah duplikasi jika JSON belum terupdate)
+            if grep -qx "$BRANCH" my_existing_branches.txt; then
+              echo "Skip: $BRANCH sudah ada di repo Anda."
+              continue
+            fi
+
+            # PROSES: Jika tidak ada di JSON dan tidak ada di repo Anda, maka ambil file .lua nya
+            echo "Syncing New Branch: $BRANCH"
+            FILE_URL="https://raw.githubusercontent.com/$SOURCE_REPO/$BRANCH/$BRANCH.lua"
             
             mkdir -p temp_file_dir
             HTTP_STATUS=$(curl -s -L -o "temp_file_dir/$BRANCH.lua" -w "%{http_code}" "$FILE_URL")
@@ -56,14 +68,16 @@ jobs:
               git rm -rf . --quiet > /dev/null
               mv "temp_file_dir/$BRANCH.lua" .
               git add "$BRANCH.lua"
-              git commit -m "Add $BRANCH.lua from public repo" --quiet
+              git commit -m "Add $BRANCH.lua (Not found in manifest)" --quiet
               git push origin "$BRANCH" --force
               COUNT=$((COUNT+1))
               git checkout -f main
             else
-              echo "Failed: $BRANCH.lua (HTTP $HTTP_STATUS)"
+              echo "Failed: File $BRANCH.lua tidak ditemukan di sumber (HTTP $HTTP_STATUS)"
               git checkout -f main
             fi
             rm -rf temp_file_dir
-          done < public_branches.txt
-          echo "Sync selesai. $COUNT branch baru ditambahkan."
+
+          done < source_branches.txt
+          
+          echo "Selesai. Total $COUNT branch baru berhasil ditambahkan."
