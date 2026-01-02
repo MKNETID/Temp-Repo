@@ -1,12 +1,12 @@
-name: Sync Branches and Update Manifest
+name: Sync Branches from Remote Manifest
 
 on:
-  #schedule:
-  #  - cron: '0 0 * * *'
+  # schedule:
+  #   - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
-  sync-and-manifest:
+  sync-process:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,22 +16,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.API_TOKEN }}
-          fetch-depth: 0 # Penting: Ambil semua branch untuk manifest nanti
+          fetch-depth: 0
 
       - name: Setup Git Config
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Sync Process (New Branches)
+      - name: Sync Process (Based on Remote Manifest)
         env:
           GH_TOKEN: ${{ secrets.API_TOKEN }}
           PUBLIC_REPO: "Princeboy520/ManifestHub"
+          # URL mentah (raw) untuk mempermudah pengambilan data JSON
+          MANIFEST_URL: "https://raw.githubusercontent.com/MKNETID/Gemesak-Project/main/data-manifest.json"
         run: |
-          # 1. Ambil daftar semua branch dari repo publik
-          gh api repos/$PUBLIC_REPO/branches --paginate --jq '.[].name' > public_branches.txt
+          # 1. Ambil daftar branch dari manifest di repo MKNETID
+          echo "Fetching manifest from $MANIFEST_URL"
+          curl -s -L "$MANIFEST_URL" | jq -r '.branches[]' > target_branches.txt
 
-          # 2. Daftar branch lokal (remote)
+          # 2. Daftar branch lokal yang sudah ada (remote)
           git branch -r | sed 's/origin\///' | tr -d ' ' > existing_branches.txt
 
           LIMIT=100
@@ -65,27 +68,6 @@ jobs:
               git checkout -f main
             fi
             rm -rf temp_file_dir
-          done < public_branches.txt
-          echo "Sync selesai. $COUNT branch baru ditambahkan."
-
-      - name: Generate and Push data-manifest.json
-        run: |
-          # Kembali ke main untuk update manifest
-          git checkout main
+          done < target_branches.txt
           
-          # Ambil semua branch remote terbaru setelah sinkronisasi
-          git fetch --prune
-          BRANCHES=$(git branch -r | grep -v 'origin/HEAD' | sed 's/origin\///' | sed 's/^[[:space:]]*//')
-          TOTAL=$(echo "$BRANCHES" | wc -l)
-          BRANCH_ARRAY=$(echo "$BRANCHES" | jq -R . | jq -s .)
-          
-          # Buat file JSON
-          echo "{
-            \"total_branches\": $TOTAL,
-            \"branches\": $BRANCH_ARRAY,
-            \"last_updated\": \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\"
-          }" > data-manifest.json
-
-          # Commit dan Push manifest ke branch main
-          git add data-manifest.json
-          git diff-index --quiet HEAD || (git commit -m "Update data-manifest.json [skip ci]" && git push origin main)
+          echo "Sync selesai. $COUNT branch baru berhasil disinkronkan."
