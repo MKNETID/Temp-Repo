@@ -27,28 +27,46 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.API_TOKEN }}
           PUBLIC_REPO: "Princeboy520/ManifestHub"
-          # URL mentah (raw) untuk mempermudah pengambilan data JSON
           MANIFEST_URL: "https://raw.githubusercontent.com/MKNETID/Gemesak-Project/main/data-manifest.json"
         run: |
-          # 1. Ambil daftar branch dari manifest di repo MKNETID
-          echo "Fetching manifest from $MANIFEST_URL"
-          curl -s -L "$MANIFEST_URL" | jq -r '.branches[]' > target_branches.txt
+          # 1. Ambil manifest dan bersihkan karakter aneh/BOM
+          echo "Fetching manifest..."
+          curl -sS -L "$MANIFEST_URL" | sed '1s/^\xEF\xBB\xBF//' > remote_manifest.json
+          
+          # 2. Validasi apakah ini JSON yang benar
+          if ! jq . remote_manifest.json > /dev/null 2>&1; then
+            echo "Error: File JSON tidak valid atau mengandung karakter ilegal."
+            # Intip 5 baris pertama untuk diagnosa
+            head -n 5 remote_manifest.json
+            exit 1
+          fi
 
-          # 2. Daftar branch lokal yang sudah ada (remote)
+          # 3. Ekstrak daftar branch (pastikan tidak ada duplikat & bersih dari \r)
+          jq -r '.branches[]' remote_manifest.json | tr -d '\r' > target_branches.txt
+
+          # 4. Ambil daftar branch lokal yang sudah ada
+          git fetch --prune
           git branch -r | sed 's/origin\///' | tr -d ' ' > existing_branches.txt
 
           LIMIT=100
           COUNT=0
           
           while IFS= read -r BRANCH; do
-            if [ -z "$BRANCH" ] || [ "$BRANCH" == "main" ] || [ $COUNT -ge $LIMIT ]; then continue; fi
+            # Lewati jika baris kosong
+            [ -z "$BRANCH" ] && continue
             
-            if grep -qx "$BRANCH" existing_branches.txt; then
-              echo "Skip: $BRANCH sudah ada."
+            # Batasi proses agar tidak kena limit GitHub Action (6 jam)
+            if [ $COUNT -ge $LIMIT ]; then 
+              echo "Limit $LIMIT tercapai. Menghentikan proses."
+              break
+            fi
+            
+            # Lewati branch main atau yang sudah ada
+            if [ "$BRANCH" == "main" ] || grep -qx "$BRANCH" existing_branches.txt; then
               continue
             fi
 
-            echo "Syncing: $BRANCH"
+            echo "Syncing branch: $BRANCH"
             FILE_URL="https://raw.githubusercontent.com/$PUBLIC_REPO/$BRANCH/$BRANCH.lua"
             
             mkdir -p temp_file_dir
@@ -59,15 +77,15 @@ jobs:
               git rm -rf . --quiet > /dev/null
               mv "temp_file_dir/$BRANCH.lua" .
               git add "$BRANCH.lua"
-              git commit -m "Add $BRANCH.lua from public repo" --quiet
+              git commit -m "Add $BRANCH.lua" --quiet
               git push origin "$BRANCH" --force
               COUNT=$((COUNT+1))
               git checkout -f main
             else
-              echo "Failed: $BRANCH.lua (HTTP $HTTP_STATUS)"
+              echo "Gagal: $BRANCH.lua (HTTP $HTTP_STATUS)"
               git checkout -f main
             fi
             rm -rf temp_file_dir
           done < target_branches.txt
           
-          echo "Sync selesai. $COUNT branch baru berhasil disinkronkan."
+          echo "Selesai! $COUNT branch baru ditambahkan."
