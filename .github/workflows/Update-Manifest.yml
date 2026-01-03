@@ -1,8 +1,8 @@
 name: Sync Update Manifest
 
 on:
-  #schedule:
-  #  - cron: '0 1 * * *'
+  # schedule:
+  #   - cron: '0 1 * * *'
   workflow_dispatch:
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.API_TOKEN }}
-          fetch-depth: 0 # Penting: Ambil semua branch untuk manifest nanti
+          fetch-depth: 0
 
       - name: Setup Git Config
         run: |
@@ -24,69 +24,68 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Sync Process (Multiple Repos)
-  env:
-    GH_TOKEN: ${{ secrets.API_TOKEN }}
-    # List repo dipisahkan spasi
-    REPOS: "fusheng215/ManifestHub kkrmpubg/ManifestHub mnbvcxz112/A hammerwebsite12/sojogames2"
-    MANIFEST_API_URL: "repos/MKNETID/Gemesak-Project/contents/data-manifest.json"
-  run: |
-    # 1. Ambil manifest private sekali saja di awal untuk referensi
-    echo "Fetching private manifest..."
-    gh api -H "Accept: application/vnd.github.v3.raw" "$MANIFEST_API_URL" > remote-manifest.json
-    
-    if [ -s "remote-manifest.json" ]; then
-      jq -r '.branches[]' remote-manifest.json > existing_branches.txt
-    else
-      touch existing_branches.txt
-    fi
-
-    LIMIT=100
-    COUNT=0
-
-    # 2. Loop melalui setiap repository yang didaftarkan
-    for PUBLIC_REPO in $REPOS; do
-      echo "--- Scanning Repo: $PUBLIC_REPO ---"
-      
-      # Ambil daftar branch dari repo ini
-      gh api repos/$PUBLIC_REPO/branches --paginate --jq '.[].name' > current_repo_branches.txt
-
-      while IFS= read -r BRANCH; do
-        if [ -z "$BRANCH" ] || [ "$BRANCH" == "main" ] || [ "$BRANCH" == "master" ] || [ $COUNT -ge $LIMIT ]; then 
-          continue
-        fi
-        
-        # Cek apakah branch sudah ada di manifest private
-        if grep -qx "$BRANCH" existing_branches.txt; then
-          echo "Skip: $BRANCH (sudah ada)."
-          continue
-        fi
-
-        echo "Syncing: $BRANCH dari $PUBLIC_REPO"
-        FILE_URL="https://raw.githubusercontent.com/$PUBLIC_REPO/$BRANCH/$BRANCH.lua"
-        
-        mkdir -p temp_file_dir
-        HTTP_STATUS=$(curl -s -L -o "temp_file_dir/$BRANCH.lua" -w "%{http_code}" "$FILE_URL")
-        
-        if [ "$HTTP_STATUS" -eq 200 ]; then
-          # Proses pembuatan branch orphan dan push
-          git checkout --orphan "$BRANCH"
-          git rm -rf . --quiet > /dev/null
-          mv "temp_file_dir/$BRANCH.lua" .
-          git add "$BRANCH.lua"
-          git commit -m "Add $BRANCH.lua from $PUBLIC_REPO" --quiet
-          git push origin "$BRANCH" --force
+        env:
+          GH_TOKEN: ${{ secrets.API_TOKEN }}
+          REPOS: "fusheng215/ManifestHub kkrmpubg/ManifestHub mnbvcxz112/A hammerwebsite12/sojogames2"
+          MANIFEST_API_URL: "repos/MKNETID/Gemesak-Project/contents/data-manifest.json"
+        run: |
+          # 1. Ambil manifest private sekali saja
+          echo "Fetching private manifest..."
+          gh api -H "Accept: application/vnd.github.v3.raw" "$MANIFEST_API_URL" > remote-manifest.json || echo "{}" > remote-manifest.json
           
-          # Catat branch baru agar tidak diproses lagi jika ada nama yang sama di repo lain
-          echo "$BRANCH" >> existing_branches.txt
-          COUNT=$((COUNT+1))
-          
-          git checkout -f main
-        else
-          echo "Gagal: $BRANCH.lua tidak ditemukan di $PUBLIC_REPO (HTTP $HTTP_STATUS)"
-          git checkout -f main
-        fi
-        rm -rf temp_file_dir
-      done < current_repo_branches.txt
-    done
+          if [ -s "remote-manifest.json" ] && [ "$(cat remote-manifest.json)" != "{}" ]; then
+            jq -r '.branches[]' remote-manifest.json > existing_branches.txt
+          else
+            touch existing_branches.txt
+          fi
 
-    echo "Sync selesai. Total branch baru: $COUNT"
+          LIMIT=100
+          COUNT=0
+
+          # 2. Loop melalui setiap repository
+          for PUBLIC_REPO in $REPOS; do
+            echo "--- Scanning Repo: $PUBLIC_REPO ---"
+            
+            # Ambil daftar branch dari repo ini
+            gh api repos/$PUBLIC_REPO/branches --paginate --jq '.[].name' > current_repo_branches.txt
+
+            while IFS= read -r BRANCH; do
+              # Validasi nama branch
+              if [ -z "$BRANCH" ] || [ "$BRANCH" == "main" ] || [ "$BRANCH" == "master" ] || [ $COUNT -ge $LIMIT ]; then 
+                continue
+              fi
+              
+              # Cek apakah branch sudah ada
+              if grep -qx "$BRANCH" existing_branches.txt; then
+                echo "Skip: $BRANCH (sudah ada)."
+                continue
+              fi
+
+              echo "Syncing: $BRANCH dari $PUBLIC_REPO"
+              FILE_URL="https://raw.githubusercontent.com/$PUBLIC_REPO/$BRANCH/$BRANCH.lua"
+              
+              mkdir -p temp_file_dir
+              HTTP_STATUS=$(curl -s -L -o "temp_file_dir/$BRANCH.lua" -w "%{http_code}" "$FILE_URL")
+              
+              if [ "$HTTP_STATUS" -eq 200 ]; then
+                # Pembuatan branch orphan
+                git checkout --orphan "$BRANCH"
+                git rm -rf . --quiet > /dev/null
+                mv "temp_file_dir/$BRANCH.lua" .
+                git add "$BRANCH.lua"
+                git commit -m "Add $BRANCH.lua from $PUBLIC_REPO" --quiet
+                git push origin "$BRANCH" --force
+                
+                echo "$BRANCH" >> existing_branches.txt
+                COUNT=$((COUNT+1))
+                
+                git checkout -f main
+              else
+                echo "Gagal: $BRANCH.lua tidak ditemukan (HTTP $HTTP_STATUS)"
+                git checkout -f main
+              fi
+              rm -rf temp_file_dir
+            done < current_repo_branches.txt
+          done
+
+          echo "Sync selesai. Total branch baru: $COUNT"
