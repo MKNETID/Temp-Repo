@@ -25,22 +25,24 @@ jobs:
 
       - name: Sync Process (New Branches)
         env:
-          GH_TOKEN: ${{ secrets.API_TOKEN }}
-          PUBLIC_REPO: "SPIN0ZAi/SB_manifest_DB"
-          MANIFEST_URL: "https://raw.githubusercontent.com/MKNETID/Gemesak-Project/main/data-manifest.json"
+          GH_TOKEN: ${{ secrets.API_TOKEN }} # Pastikan token ini punya akses ke repo MKNETID
+          PUBLIC_REPO: "Princeboy520/ManifestHub"
+          # Format path untuk API: repos/{owner}/{repo}/contents/{path}
+          MANIFEST_API_URL: "repos/MKNETID/Gemesak-Project/contents/data-manifest.json"
         run: |
           # 1. Ambil daftar branch dari repo publik
           gh api repos/$PUBLIC_REPO/branches --paginate --jq '.[].name' > public_branches.txt
 
-          # 2. Ambil JSON dari repo MKNETID/Gemesak-Project
-          echo "Fetching manifest from $MANIFEST_URL..."
-          curl -s -L "$MANIFEST_URL" -o remote-manifest.json
+          # 2. Ambil konten file JSON Private menggunakan GitHub CLI
+          # Kita menggunakan header 'application/vnd.github.v3.raw' agar mendapatkan isi file langsung (bukan base64)
+          echo "Fetching private manifest from MKNETID/Gemesak-Project..."
+          gh api -H "Accept: application/vnd.github.v3.raw" "$MANIFEST_API_URL" > remote-manifest.json
 
-          # 3. Ekstrak daftar branch yang sudah ada dari JSON tersebut
-          if [ -f "remote-manifest.json" ]; then
+          # 3. Ekstrak daftar branch dari JSON
+          if [ -s "remote-manifest.json" ]; then
             jq -r '.branches[]' remote-manifest.json > existing_branches.txt
           else
-            echo "Warning: Manifest file not found, starting fresh."
+            echo "Error: Gagal mengambil file manifest atau file kosong."
             touch existing_branches.txt
           fi
 
@@ -52,7 +54,7 @@ jobs:
             
             # Bandingkan dengan isi existing_branches.txt
             if grep -qx "$BRANCH" existing_branches.txt; then
-              echo "Skip: $BRANCH sudah tercatat di manifest MKNETID."
+              echo "Skip: $BRANCH sudah ada di manifest private."
               continue
             fi
 
@@ -77,4 +79,4 @@ jobs:
             fi
             rm -rf temp_file_dir
           done < public_branches.txt
-          echo "Sync selesai. $COUNT branch baru ditambahkan berdasarkan manifest eksternal."
+          echo "Sync selesai."
