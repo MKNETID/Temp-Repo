@@ -26,7 +26,7 @@ jobs:
       - name: Sync Process (New Branches)
         env:
           GH_TOKEN: ${{ secrets.API_TOKEN }}
-          PUBLIC_REPO: "Princeboy520/ManifestHub"
+          PUBLIC_REPO: "SPIN0ZAi/SB_manifest_DB"
           MANIFEST_URL: "https://raw.githubusercontent.com/MKNETID/Gemesak-Project/main/data-manifest.json"
         run: |
           # 1. Ambil daftar branch dari repo publik
