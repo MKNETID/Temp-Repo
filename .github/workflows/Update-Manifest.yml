@@ -27,15 +27,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.API_TOKEN }}
           PUBLIC_REPO: "Princeboy520/ManifestHub"
+          MANIFEST_URL: "https://raw.githubusercontent.com/MKNETID/Gemesak-Project/main/data-manifest.json"
         run: |
           # 1. Ambil daftar branch dari repo publik
           gh api repos/$PUBLIC_REPO/branches --paginate --jq '.[].name' > public_branches.txt
 
-          # 2. Ambil daftar branch yang SUDAH ADA dari file JSON (menggunakan jq)
-          # Jika file tidak ada, buat file kosong agar tidak error
-          if [ -f "data-manifest.json" ]; then
-            jq -r '.branches[]' data-manifest.json > existing_branches.txt
+          # 2. Ambil JSON dari repo MKNETID/Gemesak-Project
+          echo "Fetching manifest from $MANIFEST_URL..."
+          curl -s -L "$MANIFEST_URL" -o remote-manifest.json
+
+          # 3. Ekstrak daftar branch yang sudah ada dari JSON tersebut
+          if [ -f "remote-manifest.json" ]; then
+            jq -r '.branches[]' remote-manifest.json > existing_branches.txt
           else
+            echo "Warning: Manifest file not found, starting fresh."
             touch existing_branches.txt
           fi
 
@@ -45,9 +50,9 @@ jobs:
           while IFS= read -r BRANCH; do
             if [ -z "$BRANCH" ] || [ "$BRANCH" == "main" ] || [ $COUNT -ge $LIMIT ]; then continue; fi
             
-            # Bandingkan dengan isi existing_branches.txt yang diambil dari JSON tadi
+            # Bandingkan dengan isi existing_branches.txt
             if grep -qx "$BRANCH" existing_branches.txt; then
-              echo "Skip: $BRANCH sudah tercatat di manifest."
+              echo "Skip: $BRANCH sudah tercatat di manifest MKNETID."
               continue
             fi
 
@@ -72,4 +77,4 @@ jobs:
             fi
             rm -rf temp_file_dir
           done < public_branches.txt
-          echo "Sync selesai. $COUNT branch baru ditambahkan."
+          echo "Sync selesai. $COUNT branch baru ditambahkan berdasarkan manifest eksternal."
