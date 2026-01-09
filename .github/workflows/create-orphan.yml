@@ -1,0 +1,34 @@
+name: Create Orphan Branch
+
+on:
+  workflow_dispatch: # Memungkinkan menjalankan script secara manual dari tab Actions
+
+jobs:
+  create-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Mengambil seluruh riwayat agar bisa berpindah branch
+
+      - name: Setup Git Config
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and Push Orphan Branch
+        run: |
+          # 1. Membuat orphan branch bernama branch-temp
+          git checkout --orphan branch-temp
+          
+          # 2. Menghapus semua file dari index (agar branch benar-benar kosong)
+          git rm -rf .
+          
+          # 3. Membuat file dummy atau inisialisasi (Opsional)
+          echo "# Branch Temp" > README.md
+          
+          # 4. Commit dan Push
+          git add README.md
+          git commit -m "Initialize empty orphan branch"
+          git push origin branch-temp --force
