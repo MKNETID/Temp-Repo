@@ -27,8 +27,10 @@ jobs:
 
       - name: Commit and Push changes
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          # Cek apakah file ada sebelum add, jika tidak ada buat file kosong agar tidak error
+          touch latest_forks.txt 
           git add latest_forks.txt
-          git commit -m "Update list fork terbaru" || exit 0
-          git push
+          # Hanya commit jika ada perubahan (mencegah error "nothing to commit")
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update list fork terbaru" && git push)
