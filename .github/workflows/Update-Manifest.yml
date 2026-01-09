@@ -26,7 +26,7 @@ jobs:
       - name: Sync Process (Multiple Repos)
         env:
           GH_TOKEN: ${{ secrets.API_TOKEN }}
-          REPOS: "fusheng215/ManifestHub kkrmpubg/ManifestHub mnbvcxz112/A hammerwebsite12/sojogames2"
+          REPOS: "mnbvcxz112/A hammerwebsite12/sojogames2"
           MANIFEST_API_URL: "repos/MKNETID/Gemesak-Project/contents/data-manifest.json"
         run: |
           # 1. Ambil manifest private sekali saja
