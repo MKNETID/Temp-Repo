@@ -15,14 +15,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Fetch and Format Data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Mengambil data dari API dan memprosesnya menjadi teks
-          curl -s "https://api.github.com/repos/SteamAutoCracks/ManifestHub/forks?sort=pushed&per_page=5" \
-          | jq -r '.[] | "Repo: \(.full_name)\nURL: \(.html_url)\nUpdate: \(.pushed_at)\n---"' \
-          > latest_forks.txt
-
-      - name: Debug Output
-        run: cat latest_forks.txt
+          # Menggunakan header Authorization agar tidak kena Rate Limit
+          # Menambahkan pengecekan apakah output adalah array
+          curl -s -H "Authorization: token $GH_TOKEN" \
+          "https://api.github.com/repos/SteamAutoCracks/ManifestHub/forks?sort=pushed&per_page=5" > raw_data.json
+          
+          # Cek apakah raw_data.json berisi array (data valid) atau object (error)
+          if jq -e '. | type == "array"' raw_data.json > /dev/null; then
+            jq -r '.[] | "Repo: \(.full_name)\nURL: \(.html_url)\nUpdate: \(.pushed_at)\n---"' raw_data.json > latest_forks.txt
+          else
+            echo "Error dari API GitHub:"
+            cat raw_data.json
+            exit 1
+          fi
 
       - name: Commit and Push
         run: |
@@ -30,8 +38,8 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add latest_forks.txt
           if ! git diff --cached --quiet; then
-            git commit -m "Update list: $(date)"
+            git commit -m "Update list fork: $(date)"
             git push origin main
           else
-            echo "Tidak ada perubahan."
+            echo "Tidak ada perubahan data."
           fi
