@@ -3,40 +3,32 @@ name: Update Fork List
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # Berjalan setiap jam
+    - cron: '0 0 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions: # Memberikan izin tulis secara eksplisit
+    permissions:
       contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Run script
-        run: python fetch_forks.py
-
-      - name: Debug File
+      - name: Fetch and Format Data
         run: |
-          echo "Memeriksa isi file:"
-          ls -l latest_forks.txt
-          cat latest_forks.txt
+          # Mengambil data dari API dan memprosesnya menjadi teks
+          curl -s "https://api.github.com/repos/SteamAutoCracks/ManifestHub/forks?sort=pushed&per_page=5" \
+          | jq -r '.[] | "Repo: \(.full_name)\nURL: \(.html_url)\nUpdate: \(.pushed_at)\n---"' \
+          > latest_forks.txt
+
+      - name: Debug Output
+        run: cat latest_forks.txt
 
       - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add latest_forks.txt
-          # Commit hanya jika file berubah
           if ! git diff --cached --quiet; then
             git commit -m "Update list: $(date)"
             git push origin main
