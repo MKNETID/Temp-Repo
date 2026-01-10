@@ -1,53 +1,54 @@
 import requests
 import json
+import time
 
 def get_steam_uids():
-    # URL v2 yang lebih stabil dengan format json eksplisit
-    url = "https://api.steampowered.com/ISteamApps/GetAppList/v2/?format=json"
+    # Menggunakan URL alternatif yang sering digunakan untuk fetching data massal
+    # Tanpa tanda kurung atau versi v0001 yang sudah usang
+    url = "https://api.steampowered.com/ISteamApps/GetAppList/v2"
     
-    # Menambahkan Header agar tidak dianggap bot yang mencurigakan
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
     }
     
-    try:
-        print("Mengambil data dari Steam API...")
-        response = requests.get(url, headers=headers, timeout=30)
-        
-        # Cek status code
-        if response.status_code != 200:
-            print(f"Gagal akses API. Status Code: {response.status_code}")
-            # Coba fallback ke v1 jika v2 gagal
-            print("Mencoba fallback ke API v1...")
-            url_v1 = "https://api.steampowered.com/ISteamApps/GetAppList/v0001/"
-            response = requests.get(url_v1, headers=headers, timeout=30)
-        
-        response.raise_for_status()
-        data = response.json()
-        
-        # Struktur JSON Steam: applist -> apps -> list of dicts
-        apps = data.get("applist", {}).get("apps", [])
-        
-        if not apps:
-            print("Data kosong atau format JSON berubah.")
-            return
-
-        # Mengambil AppID, pastikan unik dengan set, lalu urutkan
-        uids = sorted(list(set(app["appid"] for app in apps)))
-        
-        result = {
-            "total": len(uids),
-            "uids": uids
-        }
-        
-        with open("steam_uids.json", "w") as f:
-            json.dump(result, f) # Tanpa indentasi agar ukuran file lebih kecil (opsional)
+    # Mencoba hingga 3 kali jika gagal koneksi
+    for attempt in range(3):
+        try:
+            print(f"Mencoba mengambil data (Percobaan {attempt + 1})...")
+            response = requests.get(url, headers=headers, timeout=60)
             
-        print(f"Berhasil! Total {len(uids)} UID disimpan ke steam_uids.json")
+            if response.status_code == 200:
+                data = response.json()
+                apps = data.get("applist", {}).get("apps", [])
+                
+                if apps:
+                    # Ambil AppID dan urutkan
+                    uids = sorted(list(set(app["appid"] for app in apps)))
+                    
+                    result = {
+                        "total": len(uids),
+                        "uids": uids
+                    }
+                    
+                    with open("steam_uids.json", "w") as f:
+                        json.dump(result, f)
+                    
+                    print(f"Berhasil! Ditemukan {len(uids)} UID.")
+                    return
+                else:
+                    print("Data kosong, mencoba lagi...")
+            else:
+                print(f"Server merespons dengan status: {response.status_code}")
+                
+        except Exception as e:
+            print(f"Error: {e}")
         
-    except Exception as e:
-        print(f"Terjadi kesalahan: {e}")
-        exit(1)
+        # Tunggu sebentar sebelum mencoba lagi (avoid rate limit)
+        time.sleep(5)
+
+    print("Gagal mengambil data setelah beberapa percobaan.")
+    exit(1)
 
 if __name__ == "__main__":
     get_steam_uids()
