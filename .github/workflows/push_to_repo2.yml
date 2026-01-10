@@ -1,23 +1,19 @@
-name: Zip and Push to Repo2 (Manual)
+name: Zip and Push to Repo2 (Manual Fix)
 
 on:
-  push:
-    branches:
-      - main
-  # Menambahkan trigger untuk menjalankan secara manual
   workflow_dispatch:
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Source Repo
         uses: actions/checkout@v4
 
       - name: Create Zip File
         run: |
-          zip -r release-archive.zip . -x "*.git*" ".github*"
+          # Melakukan zip semua file, mengecualikan folder internal git dan workflow
+          zip -r release-archive.zip . -x ".git/*" ".github/*"
 
       - name: Push to Target Repo
         env:
@@ -25,13 +21,17 @@ jobs:
         run: |
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-
-          # Clone repo target
+          
+          # Clone target repo
           git clone https://x-access-token:${API_TOKEN}@github.com/MKNETID/temp-repo2.git target-folder
-
-          mv release-archive.zip target-folder/
-
+          
+          # Pindahkan ZIP
+          cp release-archive.zip target-folder/
+          
           cd target-folder
           git add release-archive.zip
-          git commit -m "Update zip manual dari Temp-Repo"
+          # Force add jika file di-ignore oleh .gitignore di repo target
+          # git add -f release-archive.zip 
+          
+          git commit -m "Manual Update: Archive dari Temp-Repo" || echo "No changes to commit"
           git push origin main
